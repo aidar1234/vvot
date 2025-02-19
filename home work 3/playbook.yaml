@@ -1,0 +1,111 @@
+- name: Setup Nextcloud Server
+  hosts: vm
+  become: true
+  vars:
+    - domain_name: test.vvot02.itiscl.ru
+    - nextcloud_dir: /home/ubuntu/nextcloud
+    - certs_dir: "{{ nextcloud_dir }}/letsencrypt/certs/live/{{ domain_name }}"
+
+  tasks:
+    - name: Create nginx.conf file
+      become: false
+      local_action:
+        module: template
+        src: templates/nginx.conf.j2
+        dest: ./nginx.conf
+
+    - name: Create nginx-ssl.conf file
+      become: false
+      local_action:
+        module: template
+        src: templates/nginx-ssl.conf.j2
+        dest: ./nginx-ssl.conf
+
+    - name: Certs file exists check
+      stat:
+        path: "{{ certs_dir }}"
+      register: certs_status
+
+    - name: Update-Upgrade Software
+      apt:
+        update_cache: yes
+        upgrade: "yes"
+    - name: Install required packages
+      apt:
+        name:
+          - docker.io
+          - docker-compose
+        state: present
+
+    - name: Ensure Docker service is running
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Add ubuntu user to docker group
+      ansible.builtin.user:
+          name: ubuntu
+          groups: docker
+          append: yes
+
+    - name: Create Nextcloud directory
+      file:
+        path: "{{ nextcloud_dir }}"
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+        mode: "0777"
+
+    - name: Copy docker-compose
+      copy:
+        dest: "{{ nextcloud_dir }}/docker-compose.yaml"
+        src: docker-compose.yaml
+
+    - name: No SSL Nginx Configuration
+      set_fact:
+        nginx_config: nginx.conf
+      when: not certs_status.stat.exists
+
+    - name: SSL Nginx Configuration
+      set_fact:
+        nginx_config: nginx-ssl.conf
+      when: certs_status.stat.exists
+
+    - name: Create Nginx directory
+      args:
+        chdir: "{{ nextcloud_dir }}"
+      command:
+        mkdir nginx
+      when: not certs_status.stat.exists
+
+    - name: Create Nginx configuration
+      copy:
+        dest: "{{ nextcloud_dir }}/nginx/nginx.conf"
+        src: "{{ nginx_config }}"
+
+    - name: Run docker-compose
+      args:
+        chdir: "{{ nextcloud_dir }}"
+      command: docker-compose up -d
+
+    - name: Obtain SSL certificate with Certbot
+      command: docker run -it --rm --name certbot \
+        -v "{{ nextcloud_dir }}/letsencrypt/certs:/etc/letsencrypt" \
+        -v "{{ nextcloud_dir }}/nginx/certbot-www:/var/www/certbot" \
+        certbot/certbot certonly --webroot -w /var/www/certbot -d {{ domain_name }} \
+        --agree-tos --non-interactive \
+        -m cokip12984@codverts.com
+      when: not certs_status.stat.exists
+
+    - name: Update Nginx configuration
+      copy:
+        dest: "{{ nextcloud_dir }}/nginx/nginx.conf"
+        src: nginx-ssl.conf
+      when: not certs_status.stat.exists
+
+    - name: Restart Nginx to apply SSL
+      command: docker-compose restart nginx
+      args:
+        chdir: "{{ nextcloud_dir }}"
+      when: not certs_status.stat.exists

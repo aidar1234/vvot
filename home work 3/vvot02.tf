@@ -37,13 +37,12 @@ resource "yandex_compute_disk" "boot-disk" {
 }
 
 resource "yandex_compute_instance" "server" {
-  # TODO ADD ZONE
   name        = "nextcloud-vm"
   platform_id = "standard-v3"
   hostname    = "nextcloud"
 
   resources {
-    core_fraction = 50
+    core_fraction = 20
     cores         = 4
     memory        = 4
   }
